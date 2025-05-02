@@ -6,13 +6,14 @@ const MemoryGame = () => {
   const [gridSize, setGridSize] = useState(4);
   const [cards, setCards] = useState([]);
   const [flipped, setFlipped] = useState([]);
-  const [solved, setSolved] = useState([]);
+  const [solvedPairs, setSolvedPairs] = useState(new Set()); // Track solved pair IDs
   const [disabled, setDisabled] = useState(false);
   const [won, setWon] = useState(false);
   const [moves, setMoves] = useState(0);
   const [time, setTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [confetti, setConfetti] = useState([]);
+  const [totalPairsNeeded, setTotalPairsNeeded] = useState(0);
 
   // Numbers for the pairs
   const numberPairs = Array.from({ length: 50 }, (_, i) => i + 1);
@@ -20,21 +21,31 @@ const MemoryGame = () => {
   // Initialize the game
   const initializeGame = useCallback((size) => {
     const totalCards = size * size;
-    const pairCount = Math.floor(totalCards / 2);
-    const selectedNumbers = numberPairs.slice(0, pairCount);
-    let gameCards = [...selectedNumbers, ...selectedNumbers];
+    // For odd grids (e.g. 3x3), we'll have one less card
+    const actualCards = totalCards % 2 === 0 ? totalCards : totalCards - 1;
+    const numPairs = actualCards / 2; // This gives us correct number of pairs (e.g. 4 pairs for 3x3)
     
-    if (totalCards % 2 !== 0) {
-      gameCards.push(selectedNumbers[0]);
+    console.log(`Initializing ${size}x${size} grid:`);
+    console.log(`- Total grid spaces: ${totalCards}`);
+    console.log(`- Actual cards: ${actualCards}`);
+    console.log(`- Number of pairs needed: ${numPairs}`);
+    
+    const selectedNumbers = numberPairs.slice(0, numPairs);
+    let gameCards = [];
+    
+    // Create all pairs
+    for (let i = 0; i < numPairs; i++) {
+      gameCards.push({ id: i * 2, number: selectedNumbers[i], pairId: i });
+      gameCards.push({ id: i * 2 + 1, number: selectedNumbers[i], pairId: i });
     }
     
-    const shuffledCards = gameCards
-      .sort(() => Math.random() - 0.5)
-      .map((number, index) => ({ id: index, number }));
-
+    // Shuffle the cards
+    const shuffledCards = [...gameCards].sort(() => Math.random() - 0.5);
+    
+    setTotalPairsNeeded(numPairs);
     setCards(shuffledCards);
     setFlipped([]);
-    setSolved([]);
+    setSolvedPairs(new Set());
     setWon(false);
     setMoves(0);
     setTime(0);
@@ -57,9 +68,17 @@ const MemoryGame = () => {
     initializeGame(gridSize);
   }, [gridSize, initializeGame]);
 
-  // Helper functions
-  const isFlipped = useCallback((id) => flipped.includes(id) || solved.includes(id), [flipped, solved]);
-  const isSolved = useCallback((id) => solved.includes(id), [solved]);
+  // Check if card is flipped
+  const isCardFlipped = useCallback((cardId) => {
+    const card = cards.find(c => c.id === cardId);
+    return flipped.includes(cardId) || (card && solvedPairs.has(card.pairId));
+  }, [flipped, solvedPairs, cards]);
+
+  // Check if card is solved
+  const isCardSolved = useCallback((cardId) => {
+    const card = cards.find(c => c.id === cardId);
+    return card && solvedPairs.has(card.pairId);
+  }, [solvedPairs, cards]);
 
   // Function to create confetti effect
   const createConfetti = () => {
@@ -78,21 +97,28 @@ const MemoryGame = () => {
 
   // Check if the selected cards match
   const checkMatch = useCallback((firstId, secondId) => {
-    if (cards[firstId].number === cards[secondId].number) {
-      setSolved(prev => [...prev, firstId, secondId]);
+    const firstCard = cards.find(card => card.id === firstId);
+    const secondCard = cards.find(card => card.id === secondId);
+
+    if (firstCard && secondCard && firstCard.pairId === secondCard.pairId) {
+      setSolvedPairs(prev => {
+        const newSolved = new Set(prev);
+        newSolved.add(firstCard.pairId);
+        console.log(`Pair ${firstCard.pairId} matched. Total solved: ${newSolved.size}/${totalPairsNeeded}`);
+        return newSolved;
+      });
       setFlipped([]);
-      setDisabled(false);
     } else {
       setTimeout(() => {
         setFlipped([]);
-        setDisabled(false);
       }, 1000);
     }
-  }, [cards]);
+    setDisabled(false);
+  }, [cards, totalPairsNeeded]);
 
   // Handle card click
-  const handleClick = useCallback((id) => {
-    if (disabled || won || flipped.includes(id) || solved.includes(id)) return;
+  const handleClick = useCallback((cardId) => {
+    if (disabled || won || isCardFlipped(cardId)) return;
 
     if (!isPlaying) {
       setIsPlaying(true);
@@ -100,20 +126,34 @@ const MemoryGame = () => {
 
     setFlipped(prev => {
       if (prev.length === 0) {
-        return [id];
+        return [cardId];
       }
       if (prev.length === 1) {
         setDisabled(true);
         setMoves(m => m + 1);
-        const newFlipped = [...prev, id];
-        checkMatch(prev[0], id);
+        const newFlipped = [prev[0], cardId];
+        checkMatch(prev[0], cardId);
         return newFlipped;
       }
       return prev;
     });
-  }, [disabled, won, flipped, solved, isPlaying, checkMatch]);
+  }, [disabled, won, isPlaying, isCardFlipped, checkMatch]);
 
-  // Timer for the game
+  // Check win condition
+  useEffect(() => {
+    if (cards.length === 0 || totalPairsNeeded === 0) return;
+    
+    console.log(`Win check: Solved pairs ${solvedPairs.size}/${totalPairsNeeded}`);
+    
+    if (solvedPairs.size === totalPairsNeeded) {
+      console.log('Win condition met!');
+      setWon(true);
+      setIsPlaying(false);
+      createConfetti();
+    }
+  }, [solvedPairs, cards.length, totalPairsNeeded]);
+
+  // Timer logic
   useEffect(() => {
     let timer;
     if (isPlaying && !won) {
@@ -130,15 +170,6 @@ const MemoryGame = () => {
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
-
-  // Check win condition
-  useEffect(() => {
-    if (cards.length > 0 && solved.length > 0 && solved.length === cards.length * 2) {
-      setWon(true);
-      setIsPlaying(false);
-      createConfetti();
-    }
-  }, [solved, cards.length]);
 
   return (
     <div className="game-container">
@@ -166,6 +197,11 @@ const MemoryGame = () => {
           onChange={handleGridSizeChange}
           className="grid-input"
         />
+        {gridSize % 2 !== 0 && (
+          <div className="grid-info">
+            Note: In {gridSize}x{gridSize} grid, one card is removed to ensure all cards can be paired.
+          </div>
+        )}
       </div>
 
       <div
@@ -176,9 +212,9 @@ const MemoryGame = () => {
           <div
             key={card.id}
             onClick={() => handleClick(card.id)}
-            className={`card ${isFlipped(card.id) ? (isSolved(card.id) ? "solved" : "flipped") : ""}`}
+            className={`card ${isCardFlipped(card.id) ? (isCardSolved(card.id) ? "solved" : "flipped") : ""}`}
           >
-            {isFlipped(card.id) ? (
+            {isCardFlipped(card.id) ? (
               <span className="card-number">{card.number}</span>
             ) : (
               <span className="card-back">?</span>
